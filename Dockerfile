@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.19.0
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps (vLLM base image already has torch + CUDA)
+# Install vLLM + Python deps (torch 2.8.0 + CUDA 12.8.1 already in base image)
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 

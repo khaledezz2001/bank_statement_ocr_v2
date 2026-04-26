@@ -9,6 +9,6 @@ huggingface_hub
 openai
 
 # =========================
-# vLLM is pre-installed in
-# the base Docker image
+# vLLM inference engine
 # =========================
+vllm>=0.19.0

@@ -1,0 +1,14 @@
+# =========================
+# System / Utils
+# =========================
+runpod
+pdf2image
+pillow
+numpy
+huggingface_hub
+openai
+
+# =========================
+# vLLM is pre-installed in
+# the base Docker image
+# =========================

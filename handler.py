@@ -42,7 +42,7 @@ def start_vllm_server():
         "--gpu-memory-utilization", "0.95",
         "--dtype", "bfloat16",
         "--trust-remote-code",
-        "--limit-mm-per-prompt", "image=8",
+        "--limit-mm-per-prompt", '{"image": 8}',
         "--disable-log-requests",
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")

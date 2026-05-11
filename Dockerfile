@@ -1,67 +1,40 @@
-# ================================================================
-# Official vLLM base image — pre-compiled CUDA 12.8, SM120 fixes
-# ================================================================
-FROM vllm/vllm-openai:latest
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-WORKDIR /app
-
-# ---------------------------------------------------------------
-# HF cache
-# ---------------------------------------------------------------
-ENV HF_HOME=/models/hf
-ENV HF_HUB_CACHE=/models/hf
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/models
 ENV HF_HUB_ENABLE_HF_TRANSFER=0
-ENV HF_HUB_DISABLE_XET=1
-ENV TOKENIZERS_PARALLELISM=false
 
-# ---------------------------------------------------------------
-# Blackwell / SM120 flags
-# ---------------------------------------------------------------
-ENV CUDA_VISIBLE_DEVICES=0
-ENV TORCH_CUDA_ARCH_LIST="12.0+PTX"
-ENV VLLM_FLASH_ATTN_VERSION=2
-ENV VLLM_ATTENTION_BACKEND=FLASHINFER
-
-# ---------------------------------------------------------------
-# System deps for PDF processing
-# ---------------------------------------------------------------
+# System deps for PDFs
 RUN apt-get update && apt-get install -y \
     poppler-utils \
     libgl1 \
-    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# ---------------------------------------------------------------
-# Python deps
-# ---------------------------------------------------------------
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install vLLM + Python deps (torch 2.8.0 + CUDA 12.8.1 in base image)
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
-# ---------------------------------------------------------------
-# Download Chandra 2 at build time (~8GB, 4B params)
-# ---------------------------------------------------------------
-RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python3 - <<'PYEOF'
+# ===============================
+# DOWNLOAD Qwen3.6-27B
+# ===============================
+RUN python3 -u <<'EOF'
 from huggingface_hub import snapshot_download
+
+print("Downloading Qwen/Qwen3.6-27B...", flush=True)
+
 snapshot_download(
     repo_id="Qwen/Qwen3.6-27B",
     local_dir="/models/qwen3.6-27b",
     local_dir_use_symlinks=False,
+    resume_download=True
 )
-print("Chandra 2 downloaded successfully")
-PYEOF
 
-# ---------------------------------------------------------------
-# Lock offline at runtime
-# ---------------------------------------------------------------
-ENV HF_HUB_OFFLINE=1
-ENV TRANSFORMERS_OFFLINE=1
+print("Qwen3.6-27B download complete", flush=True)
+EOF
 
-# ---------------------------------------------------------------
-# App
-# ---------------------------------------------------------------
-COPY handler.py .
+WORKDIR /app
+COPY handler.py /app/handler.py
 
-# vllm/vllm-openai sets ENTRYPOINT to the vllm CLI — override it so our
-# handler runs with python3 directly instead of being passed as vllm args.
-ENTRYPOINT ["python3", "-u", "handler.py"]
+ENTRYPOINT ["python3"]
+CMD ["-u", "handler.py"]

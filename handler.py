@@ -43,7 +43,8 @@ def start_vllm_server():
         "--dtype", "bfloat16",
         "--trust-remote-code",
         "--limit-mm-per-prompt", '{"image": 8}',
-        "--no-enable-log-requests",
+        "--disable-log-requests",
+        "--enable-chunked-prefill",
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)

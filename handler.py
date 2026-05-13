@@ -232,9 +232,9 @@ def process_pages(images):
             model=MODEL_NAME,
             messages=messages,
             max_tokens=MAX_NEW_TOKENS,
-            temperature=0.7,
+            temperature=0.1,
             top_p=0.8,
-            presence_penalty=1.5,
+            presence_penalty=0.0,
             extra_body={
                 "top_k": 20,
                 "chat_template_kwargs": {"enable_thinking": False},
@@ -537,7 +537,7 @@ if __name__ == "__main__":
     log(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         log(f"GPU: {torch.cuda.get_device_name(0)}")
-        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB")
+        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     else:
         log("WARNING: CUDA is NOT available! Model will run on CPU (very slow).")
     

@@ -25,7 +25,7 @@ VLLM_PORT = 8100
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
 MODEL_NAME = "qwen3.6-27b"
 MAX_PAGES_PER_BATCH = 4  # Number of pages to process in a single prompt (multi-image)
-MAX_NEW_TOKENS = 65536  # Large enough for 50+ transactions per page
+MAX_NEW_TOKENS = 16384  # Must not exceed --max-model-len 32768
 
 # ===============================
 # LAUNCH vLLM SERVER
@@ -233,7 +233,7 @@ def process_pages(images):
             messages=messages,
             max_tokens=MAX_NEW_TOKENS,
             temperature=0.1,
-            top_p=0.8,
+            top_p=0.95,
             presence_penalty=0.0,
             extra_body={
                 "top_k": 20,
@@ -258,7 +258,7 @@ def process_pages(images):
         log(f"Inference error: {e}")
         import traceback
         log(f"Traceback: {traceback.format_exc()}")
-        return [json.dumps({"error": f"Batch failed: {str(e)}"})]
+        return [{"__error": f"Batch failed: {str(e)}"}]
 
 
 def parse_raw_output(raw_output, batch_idx):
@@ -298,6 +298,10 @@ def parse_raw_output(raw_output, batch_idx):
                     was_truncated = True
 
         if batch_data is not None and isinstance(batch_data, list):
+            # Check if this is an error wrapper from process_pages
+            if len(batch_data) == 1 and isinstance(batch_data[0], dict) and "__error" in batch_data[0]:
+                log(f"Batch {batch_idx} inference error: {batch_data[0]['__error']}")
+                return [], False
             log(f"Batch {batch_idx} parsed successfully: {len(batch_data)} transactions.")
             return batch_data, was_truncated
         elif batch_data is not None:
@@ -320,10 +324,10 @@ def process_pdf(pdf_bytes):
         log(f"Converted PDF to {len(images)} images.")
     except Exception as e:
         log(f"Error converting PDF: {e}")
-        return json.dumps({"error": f"Failed to convert PDF: {str(e)}"})
+        return {"error": f"Failed to convert PDF: {str(e)}"}
 
     if not images:
-        return json.dumps({"error": "No images extracted from PDF"})
+        return {"error": "No images extracted from PDF"}
 
     all_transactions = []
     
@@ -524,7 +528,11 @@ def handler(event):
     # Run Inference
     try:
         final_data = process_pdf(pdf_bytes)
-        log(f"Processing complete. Transactions found: {len(final_data) if isinstance(final_data, list) else 'N/A'}")
+        # Check if process_pdf returned an error dict
+        if isinstance(final_data, dict) and "error" in final_data:
+            log(f"Processing failed: {final_data['error']}")
+            return final_data
+        log(f"Processing complete. Transactions found: {len(final_data)}")
         return final_data
     except Exception as e:
         log(f"ERROR during process_pdf: {str(e)}")

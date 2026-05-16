@@ -8,6 +8,7 @@ import sys
 import time
 import subprocess
 import urllib.request
+import shutil
 import torch
 from datetime import datetime
 from pdf2image import convert_from_bytes
@@ -44,13 +45,18 @@ def start_vllm_server():
         "--trust-remote-code",
         "--limit-mm-per-prompt", '{"image": 8}',
         "--no-enable-log-requests",
-        "--gdn-prefill-backend", "triton",
+        "--gdn-prefill-backend", "triton",   # <-- avoids FlashInfer JIT disk bloat
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")
+
+    # Clean stale caches so previous failed runs don't leave /tmp full
+    shutil.rmtree("/root/.cache/flashinfer", ignore_errors=True)
+    shutil.rmtree("/root/.cache/vllm/torch_compile_cache", ignore_errors=True)
+
     proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
-    # Wait for server to be ready (up to 5 minutes)
-    max_wait = 300
+    # Wait for server to be ready (up to 10 minutes)
+    max_wait = 600
     waited = 0
     while waited < max_wait:
         try:

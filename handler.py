@@ -25,8 +25,8 @@ MODEL_PATH = "/models/qwen3.6-27b"
 VLLM_PORT = 8100
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
 MODEL_NAME = "qwen3.6-27b"
-MAX_PAGES_PER_BATCH = 4  # Number of pages to process in a single prompt (multi-image)
-MAX_NEW_TOKENS = 65536  # Large enough for 50+ transactions per page
+MAX_PAGES_PER_BATCH = 4
+MAX_NEW_TOKENS = 65536
 
 # ===============================
 # LAUNCH vLLM SERVER
@@ -45,7 +45,7 @@ def start_vllm_server():
         "--trust-remote-code",
         "--limit-mm-per-prompt", '{"image": 8}',
         "--no-enable-log-requests",
-        "--gdn-prefill-backend", "triton",   # <-- avoids FlashInfer JIT disk bloat
+        "--gdn-prefill-backend", "triton",
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")
 
@@ -55,7 +55,6 @@ def start_vllm_server():
 
     proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
-    # Wait for server to be ready (up to 10 minutes)
     max_wait = 600
     waited = 0
     while waited < max_wait:
@@ -70,7 +69,6 @@ def start_vllm_server():
         waited += 2
         if waited % 20 == 0:
             log(f"Still waiting for vLLM server... ({waited}s)")
-        # Check if process died
         if proc.poll() is not None:
             log(f"ERROR: vLLM server process exited with code {proc.returncode}")
             raise RuntimeError(f"vLLM server failed to start (exit code {proc.returncode})")
@@ -166,19 +164,12 @@ Rules:
 """
 
 
-
 def repair_truncated_json(text):
-    """Attempt to repair truncated JSON arrays by finding the last complete object.
-    
-    Strategy: walk backwards through all '}' positions to find the last
-    closing brace that, when followed by ']', yields a valid JSON array.
-    This handles cases where the truncation happens mid-object.
-    """
+    """Attempt to repair truncated JSON arrays by finding the last complete object."""
     start = text.find('[')
     if start == -1:
         return None
     
-    # Find all '}' positions and try each from the end
     body = text[start:]
     positions = [i for i, ch in enumerate(body) if ch == '}']
     
@@ -204,18 +195,13 @@ def image_to_base64_url(img):
 
 
 def process_pages(images):
-    """
-    Process multiple pages using Qwen3.6-27B via vLLM's OpenAI-compatible API.
-    Sends images as base64-encoded data URLs in the chat completions format.
-    """
-    # Resize images for consistency
+    """Process multiple pages using Qwen3.6-27B via vLLM's OpenAI-compatible API."""
     processed_images = []
     for img in images:
         if max(img.size) > 2000:
             img.thumbnail((2000, 2000))
         processed_images.append(img)
 
-    # Build multi-image content array for OpenAI Vision API format
     content = []
     for img in processed_images:
         content.append({
@@ -226,15 +212,11 @@ def process_pages(images):
         })
     content.append({"type": "text", "text": SYSTEM_PROMPT})
 
-    messages = [
-        {"role": "user", "content": content}
-    ]
+    messages = [{"role": "user", "content": content}]
 
     try:
         log(f"Sending {len(processed_images)} images to vLLM for inference...")
         
-        # Call vLLM via OpenAI-compatible chat completions API
-        # Using non-thinking (instruct) mode for deterministic JSON extraction
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
@@ -269,27 +251,17 @@ def process_pages(images):
 
 
 def parse_raw_output(raw_output, batch_idx):
-    """Parse raw model output into transaction list.
-
-    Returns:
-        tuple: (transactions_list, was_truncated)
-    """
+    """Parse raw model output into transaction list."""
     was_truncated = False
     try:
         cleaned = raw_output
-
-        # Strip markdown code fences
         cleaned = cleaned.replace("```json", "").replace("```", "").strip()
-
-        # Strip any thinking blocks that might leak through
         cleaned = re.sub(r' thinking.*? end ', '', cleaned, flags=re.DOTALL).strip()
 
-        # Try direct JSON parse first
         batch_data = None
         try:
             batch_data = json.loads(cleaned)
         except json.JSONDecodeError:
-            # Fallback 1: extract JSON array using regex
             json_match = re.search(r'\[.*\]', cleaned, re.DOTALL)
             if json_match:
                 try:
@@ -297,14 +269,12 @@ def parse_raw_output(raw_output, batch_idx):
                 except json.JSONDecodeError:
                     pass
 
-            # Fallback 2: repair truncated JSON (model ran out of tokens)
             if batch_data is None:
                 log("Direct parse failed. Attempting truncated JSON repair...")
                 batch_data = repair_truncated_json(cleaned)
                 if batch_data is not None:
                     was_truncated = True
 
-        # Handle {"transactions": [...]} wrapper
         if batch_data is not None and isinstance(batch_data, dict):
             if "transactions" in batch_data and isinstance(batch_data["transactions"], list):
                 log(f"Batch {batch_idx}: unwrapped 'transactions' key from dict wrapper.")
@@ -314,7 +284,6 @@ def parse_raw_output(raw_output, batch_idx):
                 return [], was_truncated
 
         if batch_data is not None and isinstance(batch_data, list):
-            # Check if this is an error wrapper from process_pages
             if len(batch_data) == 1 and isinstance(batch_data[0], dict) and "__error" in batch_data[0]:
                 log(f"Batch {batch_idx} inference error: {batch_data[0]['__error']}")
                 return [], False
@@ -330,8 +299,8 @@ def parse_raw_output(raw_output, batch_idx):
 
     return [], was_truncated
 
+
 def process_pdf(pdf_bytes):
-    # 1. Convert PDF to Images
     try:
         images = convert_from_bytes(pdf_bytes, dpi=200)
         log(f"Converted PDF to {len(images)} images.")
@@ -344,17 +313,14 @@ def process_pdf(pdf_bytes):
 
     all_transactions = []
     
-    # Process in batches — Qwen3.6-27B handles multi-image natively
     for i in range(0, len(images), MAX_PAGES_PER_BATCH):
         batch = images[i:i + MAX_PAGES_PER_BATCH]
         batch_num = i // MAX_PAGES_PER_BATCH + 1
         total_batches = (len(images) + MAX_PAGES_PER_BATCH - 1) // MAX_PAGES_PER_BATCH
         log(f"Processing batch {batch_num}/{total_batches} ({len(batch)} pages as multi-image prompt)...")
         
-        # Process all pages in the batch as a single multi-image prompt
         raw_outputs = process_pages(batch)
         
-        # Parse the combined output
         batch_truncated = False
         for j, raw_output in enumerate(raw_outputs):
             batch_transactions, was_truncated = parse_raw_output(raw_output, batch_num)
@@ -362,10 +328,9 @@ def process_pdf(pdf_bytes):
                 batch_truncated = True
             all_transactions.extend(batch_transactions)
         
-        # If output was truncated and batch had multiple pages, retry each page individually
         if batch_truncated and len(batch) > 1:
             log(f"Batch {batch_num} was truncated with {len(batch)} pages. Retrying each page individually...")
-            all_transactions = all_transactions[:-len(batch_transactions)]  # remove partial results
+            all_transactions = all_transactions[:-len(batch_transactions)]
             for page_idx, single_page in enumerate(batch):
                 log(f"  Re-processing page {i + page_idx + 1} individually...")
                 page_outputs = process_pages([single_page])
@@ -373,7 +338,6 @@ def process_pdf(pdf_bytes):
                     page_txns, _ = parse_raw_output(raw_output, f"{batch_num}-page{page_idx+1}")
                     all_transactions.extend(page_txns)
             
-    # Filter out ghost transactions — only remove truly empty records
     final_transactions = []
     for t in all_transactions:
         balance = t.get("balance")
@@ -381,20 +345,17 @@ def process_pdf(pdf_bytes):
         debit = t.get("debit")
         description = t.get("description", "").strip()
         
-        # Only remove if ALL value fields are empty/zero AND no meaningful description
         is_completely_empty = (
             (balance is None or balance == 0 or balance == 0.0)
             and credit is None
             and debit is None
         )
-        # Also remove if both debit and credit are explicitly zero
         both_zero = (credit == 0 and debit == 0)
         
         if (is_completely_empty and not description) or both_zero:
             log(f"Filtered ghost transaction: {t}")
             continue
         
-        # Keep only the 6 required fields
         cleaned_t = {
             "date": t.get("date", ""),
             "description": t.get("description", ""),
@@ -405,8 +366,7 @@ def process_pdf(pdf_bytes):
         }
         final_transactions.append(cleaned_t)
     
-    # ---- Post-processing: normalize dates ----
-    # Step 1: Fix obviously swapped dates (month > 12)
+    # Fix obviously swapped dates (month > 12)
     for t in final_transactions:
         date_str = t.get("date", "")
         if date_str:
@@ -420,11 +380,7 @@ def process_pdf(pdf_bytes):
             except (ValueError, IndexError):
                 pass
     
-    # Step 2: Detect the statement's actual date range from the data itself.
-    # Collect all valid (year, month) pairs and find the dominant range.
-    # Then check if swapping day/month on each date would place it better
-    # within the dominant range — this catches subtle misreads where both
-    # day and month are <= 12.
+    # Detect dominant months and fix subtle misreads
     from collections import Counter
     valid_months = []
     for t in final_transactions:
@@ -441,12 +397,8 @@ def process_pdf(pdf_bytes):
     
     if valid_months:
         month_counts = Counter(valid_months)
-        # The most common months represent the real date range
         common_months = {m for m, cnt in month_counts.items() if cnt >= 2}
         
-        # Step 3: For dates where month appears only once (singleton month),
-        # check if swapping day↔month would produce a month that's in common_months.
-        # This fixes cases like 2025-01-18 that should be 2025-02-18 (misread from 18.02).
         for t in final_transactions:
             date_str = t.get("date", "")
             if not date_str:
@@ -457,12 +409,10 @@ def process_pdf(pdf_bytes):
                     continue
                 y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
                 
-                # Only attempt swap if current month is a singleton AND
-                # the swapped version would be valid and in the common set
-                if (month_counts.get(m, 0) <= 1 and   # current month is rare
-                    d <= 12 and m <= 31 and             # swap would be valid
-                    d in common_months and              # swapped month is common
-                    d != m):                            # not the same value
+                if (month_counts.get(m, 0) <= 1 and
+                    d <= 12 and m <= 31 and
+                    d in common_months and
+                    d != m):
                     
                     new_date = f"{y}-{d:02d}-{m:02d}"
                     log(f"Fixing likely misread date: {date_str} -> {new_date} "
@@ -471,20 +421,17 @@ def process_pdf(pdf_bytes):
             except (ValueError, IndexError):
                 pass
     
-    # Step 4: Log singleton dates for debugging awareness
     date_counts = Counter(t.get("date", "") for t in final_transactions if t.get("date"))
     for t in final_transactions:
         d = t.get("date", "")
         if d and date_counts[d] == 1:
             log(f"Singleton date detected (possible misread): {d} — {t.get('description', '')[:60]}")
     
-    # ---- Post-processing: sort by date (chronological) for balance validation ----
     try:
         final_transactions.sort(key=lambda t: t.get("date", "0000-00-00"))
     except Exception:
         pass
     
-    # ---- Post-processing: validate debit/credit using balance changes ----
     for i in range(1, len(final_transactions)):
         prev_balance = final_transactions[i - 1].get("balance")
         curr_balance = final_transactions[i].get("balance")
@@ -522,7 +469,6 @@ def handler(event):
     job_input = event["input"]
     log(f"Input keys: {job_input.keys() if isinstance(job_input, dict) else type(job_input)}")
     
-    # Accept either 'pdf_base64' or 'file' as the input key
     pdf_b64 = job_input.get("pdf_base64") or job_input.get("file")
     
     if not pdf_b64:
@@ -538,7 +484,6 @@ def handler(event):
         log(f"ERROR: Invalid base64: {str(e)}")
         return {"error": f"Invalid base64: {str(e)}"}
 
-    # Run Inference
     try:
         final_data = process_pdf(pdf_bytes)
         log(f"Processing complete. Transactions found: {len(final_data) if isinstance(final_data, list) else 'N/A'}")
@@ -550,15 +495,13 @@ def handler(event):
         return {"error": f"Processing failed: {str(e)}"}
 
 if __name__ == "__main__":
-    # Log GPU status at startup
     log(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         log(f"GPU: {torch.cuda.get_device_name(0)}")
-        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB")
+        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     else:
         log("WARNING: CUDA is NOT available! Model will run on CPU (very slow).")
     
-    # Verify vLLM server is accessible
     try:
         models = client.models.list()
         log(f"vLLM server models: {[m.id for m in models.data]}")
@@ -568,7 +511,6 @@ if __name__ == "__main__":
     try:
         runpod.serverless.start({"handler": handler})
     finally:
-        # Clean up vLLM server when handler exits
         log("Shutting down vLLM server...")
         vllm_process.terminate()
         vllm_process.wait(timeout=10)

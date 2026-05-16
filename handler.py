@@ -25,7 +25,7 @@ VLLM_PORT = 8100
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
 MODEL_NAME = "qwen3.6-27b"
 MAX_PAGES_PER_BATCH = 4  # Number of pages to process in a single prompt (multi-image)
-MAX_NEW_TOKENS = 16384  # Must not exceed --max-model-len 32768
+MAX_NEW_TOKENS = 65536  # Large enough for 50+ transactions per page
 
 # ===============================
 # LAUNCH vLLM SERVER
@@ -44,7 +44,6 @@ def start_vllm_server():
         "--trust-remote-code",
         "--limit-mm-per-prompt", '{"image": 8}',
         "--no-enable-log-requests",
-        "--gdn-prefill-backend", "triton", 
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
@@ -88,6 +87,7 @@ log("OpenAI client ready. vLLM server running at " + VLLM_BASE_URL)
 SYSTEM_PROMPT = """You are a helpful financial assistant.
 Your task is to extract all transaction details from the provided bank statement images.
 Return ONLY a valid JSON array of objects. Do not include any markdown formatting (like ```json).
+Do NOT wrap the output in a {"transactions": [...]} object. Return the raw array directly.
 
 CRITICAL — Number formatting:
 - ALL numeric values (debit, credit, balance) MUST be plain decimal numbers using a DOT as the decimal separator.
@@ -232,9 +232,9 @@ def process_pages(images):
             model=MODEL_NAME,
             messages=messages,
             max_tokens=MAX_NEW_TOKENS,
-            temperature=0.1,
-            top_p=0.95,
-            presence_penalty=0.0,
+            temperature=0.7,
+            top_p=0.8,
+            presence_penalty=1.5,
             extra_body={
                 "top_k": 20,
                 "chat_template_kwargs": {"enable_thinking": False},
@@ -258,12 +258,12 @@ def process_pages(images):
         log(f"Inference error: {e}")
         import traceback
         log(f"Traceback: {traceback.format_exc()}")
-        return [{"__error": f"Batch failed: {str(e)}"}]
+        return [json.dumps({"error": f"Batch failed: {str(e)}"})]
 
 
 def parse_raw_output(raw_output, batch_idx):
     """Parse raw model output into transaction list.
-    
+
     Returns:
         tuple: (transactions_list, was_truncated)
     """
@@ -274,8 +274,8 @@ def parse_raw_output(raw_output, batch_idx):
         # Strip markdown code fences
         cleaned = cleaned.replace("```json", "").replace("```", "").strip()
 
-        # Strip any <think>...</think> blocks that might leak through
-        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
+        # Strip any thinking blocks that might leak through
+        cleaned = re.sub(r' thinking.*? end ', '', cleaned, flags=re.DOTALL).strip()
 
         # Try direct JSON parse first
         batch_data = None
@@ -289,13 +289,22 @@ def parse_raw_output(raw_output, batch_idx):
                     batch_data = json.loads(json_match.group())
                 except json.JSONDecodeError:
                     pass
-            
+
             # Fallback 2: repair truncated JSON (model ran out of tokens)
             if batch_data is None:
                 log("Direct parse failed. Attempting truncated JSON repair...")
                 batch_data = repair_truncated_json(cleaned)
                 if batch_data is not None:
                     was_truncated = True
+
+        # Handle {"transactions": [...]} wrapper
+        if batch_data is not None and isinstance(batch_data, dict):
+            if "transactions" in batch_data and isinstance(batch_data["transactions"], list):
+                log(f"Batch {batch_idx}: unwrapped 'transactions' key from dict wrapper.")
+                batch_data = batch_data["transactions"]
+            else:
+                log(f"Warning: Batch {batch_idx} returned dict without 'transactions' key: {list(batch_data.keys())}")
+                return [], was_truncated
 
         if batch_data is not None and isinstance(batch_data, list):
             # Check if this is an error wrapper from process_pages
@@ -304,8 +313,6 @@ def parse_raw_output(raw_output, batch_idx):
                 return [], False
             log(f"Batch {batch_idx} parsed successfully: {len(batch_data)} transactions.")
             return batch_data, was_truncated
-        elif batch_data is not None:
-            log(f"Warning: Batch {batch_idx} returned non-list JSON: {batch_data}")
         else:
             log(f"Failed to parse JSON for batch {batch_idx}. Skipping.")
             log(f"Raw output (first 500 chars): {raw_output[:500]}")
@@ -313,9 +320,8 @@ def parse_raw_output(raw_output, batch_idx):
     except Exception as e:
         log(f"Failed to parse JSON for batch {batch_idx}: {e}. Skipping.")
         log(f"Raw output (first 500 chars): {raw_output[:500]}")
-    
-    return [], was_truncated
 
+    return [], was_truncated
 
 def process_pdf(pdf_bytes):
     # 1. Convert PDF to Images
@@ -324,10 +330,10 @@ def process_pdf(pdf_bytes):
         log(f"Converted PDF to {len(images)} images.")
     except Exception as e:
         log(f"Error converting PDF: {e}")
-        return {"error": f"Failed to convert PDF: {str(e)}"}
+        return json.dumps({"error": f"Failed to convert PDF: {str(e)}"})
 
     if not images:
-        return {"error": "No images extracted from PDF"}
+        return json.dumps({"error": "No images extracted from PDF"})
 
     all_transactions = []
     
@@ -528,11 +534,7 @@ def handler(event):
     # Run Inference
     try:
         final_data = process_pdf(pdf_bytes)
-        # Check if process_pdf returned an error dict
-        if isinstance(final_data, dict) and "error" in final_data:
-            log(f"Processing failed: {final_data['error']}")
-            return final_data
-        log(f"Processing complete. Transactions found: {len(final_data)}")
+        log(f"Processing complete. Transactions found: {len(final_data) if isinstance(final_data, list) else 'N/A'}")
         return final_data
     except Exception as e:
         log(f"ERROR during process_pdf: {str(e)}")
@@ -545,7 +547,7 @@ if __name__ == "__main__":
     log(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         log(f"GPU: {torch.cuda.get_device_name(0)}")
-        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        log(f"GPU memory: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB")
     else:
         log("WARNING: CUDA is NOT available! Model will run on CPU (very slow).")
     

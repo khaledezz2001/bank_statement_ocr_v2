@@ -26,13 +26,12 @@ VLLM_PORT = 8100
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
 MODEL_NAME = "qwen3.6-27b"
 MAX_PAGES_PER_BATCH = 4
-MAX_NEW_TOKENS = 32768   # <= --max-model-len (was 65536)
+MAX_NEW_TOKENS = 28000   # Reserve ~4K+ tokens for prompt + images
 
 # ===============================
 # LAUNCH vLLM SERVER
 # ===============================
 def start_vllm_server():
-    """Launch vLLM OpenAI-compatible server as a subprocess and wait until ready."""
     cmd = [
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", MODEL_PATH,

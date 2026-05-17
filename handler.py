@@ -26,7 +26,7 @@ VLLM_PORT = 8100
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
 MODEL_NAME = "qwen3.6-27b"
 MAX_PAGES_PER_BATCH = 4
-MAX_NEW_TOKENS = 65536
+MAX_NEW_TOKENS = 32768   # <= --max-model-len (was 65536)
 
 # ===============================
 # LAUNCH vLLM SERVER
@@ -49,7 +49,6 @@ def start_vllm_server():
     ]
     log(f"Starting vLLM server: {' '.join(cmd)}")
 
-    # Clean stale caches so previous failed runs don't leave /tmp full
     shutil.rmtree("/root/.cache/flashinfer", ignore_errors=True)
     shutil.rmtree("/root/.cache/vllm/torch_compile_cache", ignore_errors=True)
 
@@ -165,7 +164,6 @@ Rules:
 
 
 def repair_truncated_json(text):
-    """Attempt to repair truncated JSON arrays by finding the last complete object."""
     start = text.find('[')
     if start == -1:
         return None
@@ -187,7 +185,6 @@ def repair_truncated_json(text):
 
 
 def image_to_base64_url(img):
-    """Convert a PIL Image to a base64 data URL for the OpenAI Vision API."""
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG", quality=85)
     img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -195,7 +192,6 @@ def image_to_base64_url(img):
 
 
 def process_pages(images):
-    """Process multiple pages using Qwen3.6-27B via vLLM's OpenAI-compatible API."""
     processed_images = []
     for img in images:
         if max(img.size) > 2000:
@@ -251,7 +247,6 @@ def process_pages(images):
 
 
 def parse_raw_output(raw_output, batch_idx):
-    """Parse raw model output into transaction list."""
     was_truncated = False
     try:
         cleaned = raw_output
@@ -366,7 +361,6 @@ def process_pdf(pdf_bytes):
         }
         final_transactions.append(cleaned_t)
     
-    # Fix obviously swapped dates (month > 12)
     for t in final_transactions:
         date_str = t.get("date", "")
         if date_str:
@@ -380,7 +374,6 @@ def process_pdf(pdf_bytes):
             except (ValueError, IndexError):
                 pass
     
-    # Detect dominant months and fix subtle misreads
     from collections import Counter
     valid_months = []
     for t in final_transactions:

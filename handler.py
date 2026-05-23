@@ -231,10 +231,7 @@ def process_pages(images):
 
         log(f"Finish reason: {finish_reason}")
         log(f"Usage: prompt_tokens={usage.prompt_tokens}, completion_tokens={usage.completion_tokens}, total_tokens={usage.total_tokens}")
-        log(f"Raw output length: {len(raw_response)} chars")
-        log(f"=== FULL RAW MODEL OUTPUT START ===")
-        log(raw_response)
-        log(f"=== FULL RAW MODEL OUTPUT END ===")
+
         
         return [raw_response]
 

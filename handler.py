@@ -19,7 +19,7 @@ def log(msg):
     print(f"[LOG] {msg}", flush=True)
 
 # ===============================
-# CONFIG
+# CONFI G
 # ===============================
 MODEL_PATH = "/models/qwen3.6-27b"
 VLLM_PORT = 8100
